@@ -13,6 +13,12 @@ Supports:
 pip install auditx-connector
 ```
 
+Core package does not force DB/Kafka drivers. Consumers install only needed drivers.
+
+PostgreSQL publisher supports both drivers:
+- `psycopg` (v3, preferred)
+- `psycopg2` / `psycopg2-binary` (fallback)
+
 Optional extras:
 
 ```bash
@@ -61,6 +67,19 @@ service.publish(
         interaction_id="int-2001",
         extra_map={"zapperCustId": "ZP-10091", "plan": "PREMIUM"},
     )
+)
+```
+
+You can also connect without DSN:
+
+```python
+postgres_config=PostgresConfig(
+    host="localhost",
+    port=5432,
+    database="auditdb",
+    username="audit_user",
+    password="audit_pass",
+    table="AUDITX_EVENT",
 )
 ```
 

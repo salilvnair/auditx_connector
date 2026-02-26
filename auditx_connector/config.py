@@ -25,7 +25,12 @@ class KafkaConfig:
 
 @dataclass(frozen=True)
 class PostgresConfig:
-    dsn: str
+    dsn: str | None = None
+    host: str | None = None
+    port: int = 5432
+    database: str | None = None
+    username: str | None = None
+    password: str | None = None
     table: str = "AUDITX_EVENT"
 
 
