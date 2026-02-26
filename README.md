@@ -44,7 +44,7 @@ from auditx_connector import (
 publisher = PostgresAuditPublisher(
     postgres_config=PostgresConfig(
         dsn="postgresql://user:pass@localhost:5432/auditdb",
-        table="audit_event",
+        table="AUDITX_EVENT",
     ),
     connector_config=AuditConnectorConfig(enabled=True, enforce_idempotency=True),
     idempotency_key_factory=DefaultIdempotencyKeyFactory(),

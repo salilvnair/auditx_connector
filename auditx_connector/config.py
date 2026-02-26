@@ -26,7 +26,7 @@ class KafkaConfig:
 @dataclass(frozen=True)
 class PostgresConfig:
     dsn: str
-    table: str = "audit_event"
+    table: str = "AUDITX_EVENT"
 
 
 @dataclass(frozen=True)
