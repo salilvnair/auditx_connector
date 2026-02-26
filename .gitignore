@@ -1,0 +1,6 @@
+.idea
+.DS_Store
+__pycache__
+api_processor.egg-info
+dist
+build

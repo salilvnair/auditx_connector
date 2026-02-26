@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auditx-connector"
+version = "0.1.0"
+description = "Canonical audit connector for Python with PostgreSQL and Kafka publishers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "AuditX" }
+]
+keywords = ["audit", "observability", "kafka", "postgres", "connector"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Libraries"
+]
+dependencies = []
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+kafka = ["kafka-python>=2.0.2"]
+all = ["psycopg[binary]>=3.1", "kafka-python>=2.0.2"]
+
+[project.urls]
+Homepage = "https://github.com/salilvnair/auditx-connector"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["auditx_connector*"]
+
+[tool.setuptools.package-data]
+auditx_connector = ["py.typed"]
