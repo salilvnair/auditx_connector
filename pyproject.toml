@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "auditx-connector"
-version = "0.1.0"
+name = "auditx_connector"
+version = "1.0.0"
 description = "Canonical audit connector for Python with PostgreSQL and Kafka publishers."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,7 +28,7 @@ kafka = ["kafka-python>=2.0.2"]
 all = ["psycopg[binary]>=3.1", "kafka-python>=2.0.2"]
 
 [project.urls]
-Homepage = "https://github.com/salilvnair/auditx-connector"
+Homepage = "https://github.com/salilvnair/auditx_connector"
 
 [tool.setuptools]
 include-package-data = true
