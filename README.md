@@ -32,6 +32,95 @@ Publisher modes (`PublisherType`):
 - `KAFKA`
 - `JAVA_API`
 
+## Consumer Configuration
+
+Consumers set config in code while constructing publisher instances.
+
+### Common connector flags
+
+```python
+from auditx_connector import AuditConnectorConfig
+
+connector_config = AuditConnectorConfig(
+    enabled=True,
+    enforce_idempotency=True,
+    raise_on_dedup=False,  # True => raise when DB insert is skipped by ON CONFLICT
+    verbose_logging=True,  # True => print execution logs per publish
+)
+```
+
+### ASYNC_DB (`PostgresConfig`)
+
+```python
+from auditx_connector import PostgresConfig
+
+# Option 1: DSN
+pg_config = PostgresConfig(
+    dsn="postgresql://audit_user:audit_pass@localhost:5432/auditdb",
+    table="AUDITX_EVENT",
+)
+
+# Option 2: host/port/database/username/password
+pg_config = PostgresConfig(
+    host="localhost",
+    port=5432,
+    database="auditdb",
+    username="audit_user",
+    password="audit_pass",
+    table="AUDITX_EVENT",
+)
+```
+
+### KAFKA (`KafkaConfig`)
+
+```python
+from auditx_connector import KafkaConfig, KafkaMessageKeyType
+
+kafka_config = KafkaConfig(
+    bootstrap_servers="localhost:9092",
+    topic="auditx.events",
+    message_key_type=KafkaMessageKeyType.IDEMPOTENCY_KEY,
+)
+```
+
+### JAVA_API (`JavaApiConfig`)
+
+```python
+from auditx_connector import JavaApiConfig
+
+java_api_config = JavaApiConfig(
+    base_url="http://localhost:8080",
+    publish_path="/auditx/v1/events/publish",
+    timeout_seconds=10.0,
+    verbose_logging=True,
+)
+```
+
+### Optional env-based loading in consumer app
+
+The connector does not auto-read env vars; consumer app can map env vars to config objects:
+
+```python
+import os
+from auditx_connector import AuditConnectorConfig, PostgresConfig
+
+connector_config = AuditConnectorConfig(
+    enabled=os.getenv("AUDITX_ENABLED", "true").lower() == "true",
+    enforce_idempotency=os.getenv("AUDITX_ENFORCE_IDEMPOTENCY", "true").lower() == "true",
+    raise_on_dedup=os.getenv("AUDITX_RAISE_ON_DEDUP", "false").lower() == "true",
+    verbose_logging=os.getenv("AUDITX_VERBOSE_LOGGING", "false").lower() == "true",
+)
+
+pg_config = PostgresConfig(
+    host=os.getenv("AUDITX_DB_HOST"),
+    port=int(os.getenv("AUDITX_DB_PORT", "5432")),
+    database=os.getenv("AUDITX_DB_NAME"),
+    username=os.getenv("AUDITX_DB_USER"),
+    password=os.getenv("AUDITX_DB_PASSWORD"),
+    table=os.getenv("AUDITX_DB_TABLE", "AUDITX_EVENT"),
+)
+```
+
 ## Quick Start
 
 ### 1. Publish via `AuditWriteRequest`
@@ -52,7 +141,12 @@ publisher = PostgresAuditPublisher(
         dsn="postgresql://user:pass@localhost:5432/auditdb",
         table="AUDITX_EVENT",
     ),
-    connector_config=AuditConnectorConfig(enabled=True, enforce_idempotency=True),
+    connector_config=AuditConnectorConfig(
+        enabled=True,
+        enforce_idempotency=True,
+        raise_on_dedup=False,  # set True to raise when ON CONFLICT skips insert
+        verbose_logging=True,  # prints runtime publish logs to console
+    ),
     idempotency_key_factory=DefaultIdempotencyKeyFactory(),
 )
 
@@ -118,7 +212,10 @@ from auditx_connector import (
 )
 
 java_api = JavaApiAuditPublisher(
-    JavaApiConfig(base_url="http://localhost:8080")
+    JavaApiConfig(
+        base_url="http://localhost:8080",
+        verbose_logging=True,  # prints runtime publish logs to console
+    )
 )
 
 # mode 1: stage + metadata map
@@ -356,6 +453,12 @@ Default key input:
 
 SHA-256 hash is used as idempotency key when key is missing.
 
+If you are debugging "publish executed but no row inserted":
+- turn on Python logging for `auditx_connector.publishers.postgres`
+- set `AuditConnectorConfig(raise_on_dedup=True)` to fail fast when insert is skipped by idempotency conflict
+- provide `interaction_id/group_id` (or explicit `idempotency_key`) so repeated calls are not treated as duplicates unintentionally
+- set `AuditConnectorConfig(verbose_logging=True)` to print execution-level messages (start, rows_affected, dedupe, error)
+
 ## Local install without publishing
 
 Use this when you want to test on another system without uploading to PyPI.
@@ -416,3 +519,21 @@ python -m twine upload dist/*
 
 - Package name: `auditx-connector`
 - Import path: `auditx_connector`
+
+## Publishing the package
+
+# 1) bump version (example: 1.0.0 -> 1.0.1)
+sed -i '' 's/^version = "1.0.0"/version = "1.0.1"/' pyproject.toml
+
+# 2) clean old artifacts
+rm -rf dist build *.egg-info
+
+# 3) build
+python -m pip install --upgrade build twine
+python -m build
+
+# 4) validate package
+python -m twine check dist/*
+
+# 5) publish to PyPI
+python -m twine upload dist/*

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
+from typing import Any
 
 from auditx_connector.config import AuditConnectorConfig, KafkaConfig, KafkaMessageKeyType
 from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory, validate_envelope
+
+logger = logging.getLogger(__name__)
 
 
 class KafkaAuditPublisher:
@@ -33,14 +37,41 @@ class KafkaAuditPublisher:
 
     def publish(self, envelope: CanonicalAuditEnvelope) -> None:
         if not self.connector_config.enabled:
+            self._verbose("publish skipped: connector disabled")
             return
 
-        validate_envelope(envelope)
-        enriched = self._enrich(envelope)
-        message_key = self._message_key(enriched)
-        payload = json.dumps(asdict(enriched), default=str)
+        try:
+            validate_envelope(envelope)
+            enriched = self._enrich(envelope)
+            message_key = self._message_key(enriched)
+            payload = json.dumps(asdict(enriched), default=str)
 
-        self._producer.send(self.kafka_config.topic, key=message_key, value=payload)
+            self._verbose(
+                "publish start: topic=%s key=%s event_type=%s conversation_id=%s",
+                self.kafka_config.topic,
+                message_key,
+                enriched.event_type,
+                enriched.conversation_id,
+            )
+            self._producer.send(self.kafka_config.topic, key=message_key, value=payload)
+            logger.info(
+                "AuditX kafka publish queued. topic=%s key=%s event_type=%s conversation_id=%s",
+                self.kafka_config.topic,
+                message_key,
+                enriched.event_type,
+                enriched.conversation_id,
+            )
+            self._verbose(
+                "publish queued: topic=%s key=%s event_type=%s conversation_id=%s",
+                self.kafka_config.topic,
+                message_key,
+                enriched.event_type,
+                enriched.conversation_id,
+            )
+        except Exception as exc:
+            logger.exception("AuditX kafka publish failed: %s", exc)
+            self._verbose("publish failed: %s", exc)
+            raise
 
     def close(self) -> None:
         self._producer.flush()
@@ -65,3 +96,9 @@ class KafkaAuditPublisher:
             return envelope.conversation_id or envelope.event_id
 
         return envelope.idempotency_key or envelope.event_id
+
+    def _verbose(self, message: str, *args: Any) -> None:
+        if not self.connector_config.verbose_logging:
+            return
+        formatted = message % args if args else message
+        print(f"[auditx][kafka] {formatted}")

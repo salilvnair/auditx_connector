@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from typing import Any, Mapping
 from urllib import request as urllib_request
 
 from auditx_connector.config import JavaApiConfig
 from auditx_connector.models import AuditSeverity, AuditSource, AuditWriteRequest, CanonicalAuditEnvelope
+
+logger = logging.getLogger(__name__)
 
 
 class JavaApiAuditPublisher:
@@ -51,19 +54,38 @@ class JavaApiAuditPublisher:
 
     def _post(self, payload: Mapping[str, Any]) -> dict[str, str]:
         endpoint = f"{self.java_api_config.base_url.rstrip('/')}{self.java_api_config.publish_path}"
-        req = urllib_request.Request(
-            endpoint,
-            data=json.dumps(payload, default=str).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        self._verbose("publish start: endpoint=%s payload_keys=%s", endpoint, list(payload.keys()))
+        try:
+            req = urllib_request.Request(
+                endpoint,
+                data=json.dumps(payload, default=str).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
 
-        with urllib_request.urlopen(req, timeout=self.java_api_config.timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-            if not body:
-                return {"status": "UNKNOWN"}
-            decoded = json.loads(body)
-            return {str(k): str(v) for k, v in decoded.items()}
+            with urllib_request.urlopen(req, timeout=self.java_api_config.timeout_seconds) as response:
+                body = response.read().decode("utf-8")
+                status_code = getattr(response, "status", "UNKNOWN")
+                if not body:
+                    logger.info("AuditX java_api publish success. endpoint=%s status=%s", endpoint, status_code)
+                    self._verbose("publish success: endpoint=%s status=%s response=UNKNOWN", endpoint, status_code)
+                    return {"status": "UNKNOWN"}
+
+                decoded = json.loads(body)
+                mapped = {str(k): str(v) for k, v in decoded.items()}
+                logger.info("AuditX java_api publish success. endpoint=%s status=%s", endpoint, status_code)
+                self._verbose("publish success: endpoint=%s status=%s response=%s", endpoint, status_code, mapped)
+                return mapped
+        except Exception as exc:
+            logger.exception("AuditX java_api publish failed: %s", exc)
+            self._verbose("publish failed: endpoint=%s error=%s", endpoint, exc)
+            raise
+
+    def _verbose(self, message: str, *args: Any) -> None:
+        if not self.java_api_config.verbose_logging:
+            return
+        formatted = message % args if args else message
+        print(f"[auditx][java_api] {formatted}")
 
 
 def _to_api_map(value: Any) -> dict[str, Any]:

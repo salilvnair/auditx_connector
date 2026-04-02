@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from dataclasses import asdict
 from typing import Any, Callable, Literal
 
 from auditx_connector.config import AuditConnectorConfig, PostgresConfig
 from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory, validate_envelope
+
+logger = logging.getLogger(__name__)
 
 
 class PostgresAuditPublisher:
@@ -22,60 +26,96 @@ class PostgresAuditPublisher:
 
     def publish(self, envelope: CanonicalAuditEnvelope) -> None:
         if not self.connector_config.enabled:
+            self._verbose("publish skipped: connector disabled")
             return
 
-        validate_envelope(envelope)
-        enriched = self._enrich(envelope)
+        try:
+            validate_envelope(envelope)
+            enriched = self._enrich(envelope)
 
-        event_payload = asdict(enriched)
-        connect_args = _build_connect_args(self.postgres_config, self._driver)
-        json_wrapper = _json_wrapper(self._driver)
+            event_payload = asdict(enriched)
+            connect_args = _build_connect_args(self.postgres_config, self._driver)
+            json_wrapper = _json_wrapper(self._driver)
 
-        sql = f"""
-            INSERT INTO {self.postgres_config.table} (
-                event_id, event_time, event_type, severity, source,
-                service_name, service_version, environment,
-                session_id, conversation_id, group_id, interaction_id,
-                trace_id, span_id, idempotency_key,
-                business_keys, extra_map, actor, error_map, event_payload
-            ) VALUES (
-                %(event_id)s, %(event_time)s, %(event_type)s, %(severity)s, %(source)s,
-                %(service_name)s, %(service_version)s, %(environment)s,
-                %(session_id)s, %(conversation_id)s, %(group_id)s, %(interaction_id)s,
-                %(trace_id)s, %(span_id)s, %(idempotency_key)s,
-                %(business_keys)s, %(extra_map)s, %(actor)s, %(error_map)s, %(event_payload)s
+            table_name = _validate_table_name(self.postgres_config.table)
+            self._verbose(
+                "publish start: table=%s event_type=%s conversation_id=%s idempotency_key=%s",
+                table_name,
+                enriched.event_type,
+                enriched.conversation_id,
+                enriched.idempotency_key,
             )
-            ON CONFLICT (idempotency_key) DO NOTHING
-        """
-
-        conn = _connect(self._driver, connect_args)
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    {
-                        "event_id": enriched.event_id,
-                        "event_time": enriched.event_time,
-                        "event_type": enriched.event_type,
-                        "severity": enriched.severity.value,
-                        "source": enriched.source.value,
-                        "service_name": enriched.service_name,
-                        "service_version": enriched.service_version,
-                        "environment": enriched.environment,
-                        "session_id": enriched.session_id,
-                        "conversation_id": enriched.conversation_id,
-                        "group_id": enriched.group_id,
-                        "interaction_id": enriched.interaction_id,
-                        "trace_id": enriched.trace_id,
-                        "span_id": enriched.span_id,
-                        "idempotency_key": enriched.idempotency_key,
-                        "business_keys": json_wrapper(enriched.business_keys),
-                        "extra_map": json_wrapper(enriched.extra_map),
-                        "actor": json_wrapper(enriched.actor),
-                        "error_map": json_wrapper(enriched.error_map),
-                        "event_payload": json_wrapper(_json_defaultable(event_payload)),
-                    },
+            sql = f"""
+                INSERT INTO {table_name} (
+                    event_id, event_time, event_type, severity, source,
+                    service_name, service_version, environment,
+                    session_id, conversation_id, group_id, interaction_id,
+                    trace_id, span_id, idempotency_key,
+                    business_keys, extra_map, actor, error_map, event_payload
+                ) VALUES (
+                    %(event_id)s, %(event_time)s, %(event_type)s, %(severity)s, %(source)s,
+                    %(service_name)s, %(service_version)s, %(environment)s,
+                    %(session_id)s, %(conversation_id)s, %(group_id)s, %(interaction_id)s,
+                    %(trace_id)s, %(span_id)s, %(idempotency_key)s,
+                    %(business_keys)s, %(extra_map)s, %(actor)s, %(error_map)s, %(event_payload)s
                 )
+                ON CONFLICT (idempotency_key) DO NOTHING
+            """
+
+            conn = _connect(self._driver, connect_args)
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        sql,
+                        {
+                            "event_id": enriched.event_id,
+                            "event_time": enriched.event_time,
+                            "event_type": enriched.event_type,
+                            "severity": enriched.severity.value,
+                            "source": enriched.source.value,
+                            "service_name": enriched.service_name,
+                            "service_version": enriched.service_version,
+                            "environment": enriched.environment,
+                            "session_id": enriched.session_id,
+                            "conversation_id": enriched.conversation_id,
+                            "group_id": enriched.group_id,
+                            "interaction_id": enriched.interaction_id,
+                            "trace_id": enriched.trace_id,
+                            "span_id": enriched.span_id,
+                            "idempotency_key": enriched.idempotency_key,
+                            "business_keys": json_wrapper(enriched.business_keys),
+                            "extra_map": json_wrapper(enriched.extra_map),
+                            "actor": json_wrapper(enriched.actor),
+                            "error_map": json_wrapper(enriched.error_map),
+                            "event_payload": json_wrapper(_json_defaultable(event_payload)),
+                        },
+                    )
+                    rows_affected = cur.rowcount
+                    if rows_affected == 0:
+                        message = (
+                            "AuditX deduplicated event (rows_affected=0). "
+                            f"event_type={enriched.event_type}, "
+                            f"conversation_id={enriched.conversation_id}, "
+                            f"idempotency_key={enriched.idempotency_key}"
+                        )
+                        if self.connector_config.raise_on_dedup:
+                            raise RuntimeError(message)
+                        logger.warning(message)
+                        self._verbose(message)
+                    else:
+                        message = (
+                            "AuditX insert success. "
+                            f"rows_affected={rows_affected} "
+                            f"event_id={enriched.event_id} "
+                            f"event_type={enriched.event_type} "
+                            f"conversation_id={enriched.conversation_id}"
+                        )
+                        logger.info(message)
+                        self._verbose(message)
+        except Exception as exc:
+            logger.exception("AuditX publish failed: %s", exc)
+            self._verbose("AuditX publish failed: %s", exc)
+            raise
 
     def _enrich(self, envelope: CanonicalAuditEnvelope) -> CanonicalAuditEnvelope:
         if not self.connector_config.enforce_idempotency:
@@ -85,6 +125,12 @@ class PostgresAuditPublisher:
             return envelope
 
         return envelope.with_idempotency_key(self.idempotency_key_factory.create(envelope))
+
+    def _verbose(self, message: str, *args: Any) -> None:
+        if not self.connector_config.verbose_logging:
+            return
+        formatted = message % args if args else message
+        print(f"[auditx][postgres] {formatted}")
 
 
 def _json_defaultable(payload: dict[str, Any]) -> dict[str, Any]:
@@ -149,3 +195,17 @@ def _connect(driver: Literal["psycopg", "psycopg2"], connect_args: dict[str, Any
 
     import psycopg2
     return psycopg2.connect(**connect_args)
+
+
+def _validate_table_name(table_name: str) -> str:
+    name = (table_name or "").strip()
+    if not name:
+        raise ValueError("PostgresConfig.table must not be empty")
+
+    # Allow unquoted identifiers with optional schema: schema.table or table.
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?", name):
+        raise ValueError(
+            "PostgresConfig.table supports only unquoted table or schema.table names "
+            "(alphanumeric and underscores)."
+        )
+    return name

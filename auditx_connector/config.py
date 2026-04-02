@@ -39,6 +39,7 @@ class JavaApiConfig:
     base_url: str
     publish_path: str = "/auditx/v1/events/publish"
     timeout_seconds: float = 10.0
+    verbose_logging: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,3 +47,5 @@ class AuditConnectorConfig:
     enabled: bool = True
     enforce_idempotency: bool = True
     async_publish: bool = True
+    raise_on_dedup: bool = False
+    verbose_logging: bool = False
