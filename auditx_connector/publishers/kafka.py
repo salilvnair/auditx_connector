@@ -5,8 +5,10 @@ import logging
 from dataclasses import asdict
 from typing import Any
 
+from uuid import uuid4
+
 from auditx_connector.config import AuditConnectorConfig, KafkaConfig, KafkaMessageKeyType
-from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory, validate_envelope
+from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,6 @@ class KafkaAuditPublisher:
             return
 
         try:
-            validate_envelope(envelope)
             enriched = self._enrich(envelope)
             message_key = self._message_key(enriched)
             payload = json.dumps(asdict(enriched), default=str)
@@ -78,13 +79,17 @@ class KafkaAuditPublisher:
         self._producer.close()
 
     def _enrich(self, envelope: CanonicalAuditEnvelope) -> CanonicalAuditEnvelope:
-        if not self.connector_config.enforce_idempotency:
-            return envelope
+        enriched = envelope
 
-        if envelope.idempotency_key:
-            return envelope
+        # Auto-generate conversation_id if not supplied.
+        if not enriched.conversation_id:
+            enriched = enriched.with_conversation_id(str(uuid4()))
 
-        return envelope.with_idempotency_key(self.idempotency_key_factory.create(envelope))
+        # Always generate idempotency key — enforce_idempotency only controls duplicate checking.
+        if not enriched.idempotency_key:
+            enriched = enriched.with_idempotency_key(self.idempotency_key_factory.create(enriched))
+
+        return enriched
 
     def _message_key(self, envelope: CanonicalAuditEnvelope) -> str:
         key_type = self.kafka_config.message_key_type

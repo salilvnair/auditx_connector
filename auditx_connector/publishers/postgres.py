@@ -6,8 +6,10 @@ import re
 from dataclasses import asdict
 from typing import Any, Callable, Literal
 
+from uuid import uuid4
+
 from auditx_connector.config import AuditConnectorConfig, PostgresConfig
-from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory, validate_envelope
+from auditx_connector.models import CanonicalAuditEnvelope, IdempotencyKeyFactory
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,6 @@ class PostgresAuditPublisher:
             return
 
         try:
-            validate_envelope(envelope)
             enriched = self._enrich(envelope)
 
             event_payload = asdict(enriched)
@@ -51,13 +52,13 @@ class PostgresAuditPublisher:
                     service_name, service_version, environment,
                     session_id, conversation_id, group_id, interaction_id,
                     trace_id, span_id, idempotency_key,
-                    business_keys, extra_map, actor, error_map, event_payload
+                    business_keys, extra_map, tags, actor, error_map, event_payload
                 ) VALUES (
                     %(event_id)s, %(event_time)s, %(event_type)s, %(severity)s, %(source)s,
                     %(service_name)s, %(service_version)s, %(environment)s,
                     %(session_id)s, %(conversation_id)s, %(group_id)s, %(interaction_id)s,
                     %(trace_id)s, %(span_id)s, %(idempotency_key)s,
-                    %(business_keys)s, %(extra_map)s, %(actor)s, %(error_map)s, %(event_payload)s
+                    %(business_keys)s, %(extra_map)s, %(tags)s, %(actor)s, %(error_map)s, %(event_payload)s
                 )
                 ON CONFLICT (idempotency_key) DO NOTHING
             """
@@ -85,6 +86,7 @@ class PostgresAuditPublisher:
                             "idempotency_key": enriched.idempotency_key,
                             "business_keys": json_wrapper(enriched.business_keys),
                             "extra_map": json_wrapper(enriched.extra_map),
+                            "tags": json_wrapper(enriched.tags),
                             "actor": json_wrapper(enriched.actor),
                             "error_map": json_wrapper(enriched.error_map),
                             "event_payload": json_wrapper(_json_defaultable(event_payload)),
@@ -118,13 +120,17 @@ class PostgresAuditPublisher:
             raise
 
     def _enrich(self, envelope: CanonicalAuditEnvelope) -> CanonicalAuditEnvelope:
-        if not self.connector_config.enforce_idempotency:
-            return envelope
+        enriched = envelope
 
-        if envelope.idempotency_key:
-            return envelope
+        # Auto-generate conversation_id if not supplied.
+        if not enriched.conversation_id:
+            enriched = enriched.with_conversation_id(str(uuid4()))
 
-        return envelope.with_idempotency_key(self.idempotency_key_factory.create(envelope))
+        # Always generate idempotency key — enforce_idempotency only controls duplicate checking.
+        if not enriched.idempotency_key:
+            enriched = enriched.with_idempotency_key(self.idempotency_key_factory.create(enriched))
+
+        return enriched
 
     def _verbose(self, message: str, *args: Any) -> None:
         if not self.connector_config.verbose_logging:
